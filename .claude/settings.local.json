@@ -28,7 +28,9 @@
       "Bash(git remote add:*)",
       "Bash(git push:*)",
       "Bash(vercel ls:*)",
-      "Bash(vercel link:*)"
+      "Bash(vercel link:*)",
+      "Bash(find:*)",
+      "Bash(./start-local.sh:*)"
     ],
     "deny": []
   }

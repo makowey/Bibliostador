@@ -221,10 +221,22 @@ async function selectTerritory(roomId, playerId, targetTerritoryId) {
       options: ['Moses', 'David', 'Abraham', 'Joshua'],
       correctAnswer: 0,
       type: 'multiple_choice'
+    },
+    {
+      id: '2',
+      text: 'How many years did the Israelites wander in the wilderness?',
+      numericalAnswer: 40,
+      type: 'numerical'
+    },
+    {
+      id: '3',
+      text: 'What was the name of Abraham\'s son of promise?',
+      textAnswer: 'Isaac',
+      type: 'text'
     }
   ];
 
-  const question = sampleQuestions[0]; // Random selection in real implementation
+  const question = sampleQuestions[Math.floor(Math.random() * sampleQuestions.length)];
 
   room.currentDuel = {
     attackerId: playerId,
@@ -249,7 +261,17 @@ async function submitDuelAnswer(roomId, playerId, answer, timestamp) {
   }
 
   // Store answer
-  const isCorrect = room.currentQuestion.correctAnswer === answer;
+  let isCorrect = false;
+  if (room.currentQuestion.type === 'multiple_choice') {
+    isCorrect = room.currentQuestion.correctAnswer === answer;
+  } else if (room.currentQuestion.type === 'text') {
+    const correctText = room.currentQuestion.textAnswer.toLowerCase().trim();
+    const userText = String(answer).toLowerCase().trim();
+    isCorrect = correctText === userText;
+  } else if (room.currentQuestion.type === 'numerical') {
+    // For numerical questions, exact match or close enough
+    isCorrect = Math.abs(room.currentQuestion.numericalAnswer - answer) <= 1;
+  }
   room.playerAnswers[playerId] = {
     playerId,
     answer,

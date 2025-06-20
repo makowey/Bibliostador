@@ -1,6 +1,7 @@
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { v4 as uuidv4 } from 'uuid';
+import { questions, getRandomQuestion, getRandomQuestionByType } from './data.js';
 
 const httpServer = createServer();
 const io = new Server(httpServer, {
@@ -20,89 +21,7 @@ const aiNames = [
 	'Elijah the Prophet', 'Daniel the Interpreter', 'Esther the Queen'
 ];
 
-const sampleQuestions = [
-	{
-		id: '1',
-		text: 'Who led the Israelites out of Egypt?',
-		options: ['Moses', 'David', 'Abraham', 'Joshua'],
-		correctAnswer: 0,
-		category: 'Old Testament',
-		difficulty: 'easy',
-		type: 'multiple_choice'
-	},
-	{
-		id: '2',
-		text: 'In which city was Jesus born?',
-		options: ['Jerusalem', 'Nazareth', 'Bethlehem', 'Capernaum'],
-		correctAnswer: 2,
-		category: 'New Testament',
-		difficulty: 'easy',
-		type: 'multiple_choice'
-	},
-	{
-		id: '3',
-		text: 'How many days did it rain during the flood?',
-		options: ['30', '40', '50', '60'],
-		correctAnswer: 1,
-		category: 'Old Testament',
-		difficulty: 'medium',
-		type: 'multiple_choice'
-	},
-	{
-		id: '4',
-		text: 'How many disciples did Jesus choose?',
-		options: ['10', '12', '14', '16'],
-		correctAnswer: 1,
-		category: 'New Testament',
-		difficulty: 'easy',
-		type: 'multiple_choice'
-	},
-	{
-		id: '5',
-		text: 'Who was the first king of Israel?',
-		options: ['David', 'Saul', 'Solomon', 'Samuel'],
-		correctAnswer: 1,
-		category: 'Old Testament',
-		difficulty: 'medium',
-		type: 'multiple_choice'
-	},
-	{
-		id: '6',
-		text: 'How many books are in the New Testament?',
-		options: ['25', '26', '27', '28'],
-		correctAnswer: 2,
-		category: 'General',
-		difficulty: 'hard',
-		type: 'multiple_choice'
-	}
-];
-
-const numericalQuestions = [
-	{
-		id: 'n1',
-		text: 'How many years did the Israelites wander in the wilderness?',
-		numericalAnswer: 40,
-		category: 'Old Testament',
-		difficulty: 'medium',
-		type: 'numerical'
-	},
-	{
-		id: 'n2', 
-		text: 'How many plagues did God send to Egypt?',
-		numericalAnswer: 10,
-		category: 'Old Testament',
-		difficulty: 'easy',
-		type: 'numerical'
-	},
-	{
-		id: 'n3',
-		text: 'How many chapters are in the book of Psalms?',
-		numericalAnswer: 150,
-		category: 'Old Testament',
-		difficulty: 'hard',
-		type: 'numerical'
-	}
-];
+// Questions are now imported from data.ts - 100 comprehensive Bible questions
 
 const capitalCities = ['jerusalem', 'samaria', 'gaza'];
 const playerColors = ['blue', 'red', 'gold'];
@@ -361,15 +280,32 @@ function startGame(roomId) {
 	room.timeRemaining = 30; // Time to select target territory
 
 	console.log(`Game started in room ${roomId}. Player ${room.players[0].name} goes first.`);
+	
+	// Handle AI player turn if first player is AI
+	const firstPlayer = room.players[0];
+	if (players.get(firstPlayer.id)?.isAI) {
+		setTimeout(() => {
+			aiSelectTerritory(firstPlayer.id);
+		}, 2000); // AI thinks for 2 seconds
+	}
+
+	// Start territory selection timer
+	startTerritorySelectionTimer(roomId);
+	
 	io.to(roomId).emit('gameState', room);
 }
 
-function getRandomQuestion() {
-	return sampleQuestions[Math.floor(Math.random() * sampleQuestions.length)];
+// Use the imported question functions from data.ts
+function getRandomQuestionForDuel() {
+	return getRandomQuestion();
 }
 
 function getRandomNumericalQuestion() {
-	return numericalQuestions[Math.floor(Math.random() * numericalQuestions.length)];
+	return getRandomQuestionByType('numerical');
+}
+
+function getRandomTextQuestion() {
+	return getRandomQuestionByType('text');
 }
 
 function startDuel(roomId, attackerId, targetTerritoryId) {
@@ -383,7 +319,7 @@ function startDuel(roomId, attackerId, targetTerritoryId) {
 		return;
 	}
 
-	const question = getRandomQuestion();
+	const question = getRandomQuestionForDuel();
 	room.currentDuel = {
 		attackerId: attackerId,
 		defenderId: defenderId,
@@ -394,19 +330,29 @@ function startDuel(roomId, attackerId, targetTerritoryId) {
 
 	room.phase = 'duel';
 	room.currentQuestion = question;
-	room.timeRemaining = 15;
+	room.timeRemaining = 20; // Increased from 15 to 20 seconds
+	room.duelStartTime = Date.now(); // Track when duel started
 	room.playerAnswers = {};
 
 	console.log(`Duel started between ${attackerId} and ${defenderId} for territory ${targetTerritoryId} in room ${roomId}`);
 	
 	// Schedule AI answers if needed
+	const humanPlayerInDuel = room.players.some(p => 
+		(p.id === attackerId || p.id === defenderId) && !players.get(p.id)?.isAI
+	);
+	
 	[attackerId, defenderId].forEach(playerId => {
 		if (players.get(playerId)?.isAI) {
 			const aiPlayer = aiPlayers.get(playerId);
 			if (aiPlayer) {
+				// Give human players more time when they're in a duel
+				const responseDelay = humanPlayerInDuel ? 
+					Math.max(8000, aiPlayer.responseTime * 1000) : // Minimum 8 seconds with humans
+					aiPlayer.responseTime * 1000; // Normal timing for AI vs AI
+					
 				setTimeout(() => {
 					aiAnswerDuel(playerId);
-				}, aiPlayer.responseTime * 1000);
+				}, responseDelay);
 			}
 		}
 	});
@@ -430,6 +376,39 @@ function startDuelTimer(roomId) {
 	}, 1000);
 }
 
+function startTerritorySelectionTimer(roomId) {
+	const room = gameRooms.get(roomId);
+	if (!room) return;
+
+	const currentPlayer = room.players[room.currentPlayerIndex];
+	const isAIPlayer = players.get(currentPlayer.id)?.isAI;
+
+	const timer = setInterval(() => {
+		if (room.phase !== 'territory_selection') {
+			clearInterval(timer);
+			return;
+		}
+
+		room.timeRemaining--;
+		io.to(roomId).emit('gameState', room);
+
+		if (room.timeRemaining <= 0) {
+			clearInterval(timer);
+			
+			// Only auto-skip for AI players or if no attackable territories
+			if (isAIPlayer) {
+				console.log(`Territory selection timeout for AI player ${currentPlayer.name}, skipping turn`);
+				nextTurn(roomId);
+			} else {
+				// For human players, give them more time but warn them
+				console.log(`Human player ${currentPlayer.name} is taking a long time, extending timer`);
+				room.timeRemaining = 15; // Give 15 more seconds
+				io.to(roomId).emit('gameState', room);
+			}
+		}
+	}, 1000);
+}
+
 function aiAnswerDuel(aiId) {
 	const player = players.get(aiId);
 	const aiPlayer = aiPlayers.get(aiId);
@@ -442,17 +421,40 @@ function aiAnswerDuel(aiId) {
 	if (room.playerAnswers[aiId]) return;
 
 	let answer;
-	if (Math.random() < aiPlayer.intelligence) {
-		// AI answers correctly
-		answer = room.currentQuestion.correctAnswer;
-	} else {
-		// AI answers incorrectly (random wrong answer)
-		const wrongAnswers = [0, 1, 2, 3].filter(i => i !== room.currentQuestion.correctAnswer);
-		answer = wrongAnswers[Math.floor(Math.random() * wrongAnswers.length)];
+	if (room.currentQuestion.type === 'multiple_choice') {
+		if (Math.random() < aiPlayer.intelligence) {
+			// AI answers correctly
+			answer = room.currentQuestion.correctAnswer;
+		} else {
+			// AI answers incorrectly (random wrong answer)
+			const wrongAnswers = [0, 1, 2, 3].filter(i => i !== room.currentQuestion.correctAnswer);
+			answer = wrongAnswers[Math.floor(Math.random() * wrongAnswers.length)];
+		}
+	} else if (room.currentQuestion.type === 'text') {
+		if (Math.random() < aiPlayer.intelligence) {
+			// AI answers correctly
+			answer = room.currentQuestion.textAnswer;
+		} else {
+			// AI answers incorrectly (common wrong biblical names)
+			const wrongAnswers = ['Moses', 'David', 'Abraham', 'Solomon', 'Paul', 'Peter'];
+			answer = wrongAnswers[Math.floor(Math.random() * wrongAnswers.length)];
+		}
+	} else if (room.currentQuestion.type === 'numerical') {
+		// Handle numerical questions (already handled separately)
+		answer = room.currentQuestion.numericalAnswer;
 	}
 
 	// Submit AI answer
-	const isCorrect = room.currentQuestion.correctAnswer === answer;
+	let isCorrect = false;
+	if (room.currentQuestion.type === 'multiple_choice') {
+		isCorrect = room.currentQuestion.correctAnswer === answer;
+	} else if (room.currentQuestion.type === 'text') {
+		const correctText = room.currentQuestion.textAnswer.toLowerCase().trim();
+		const aiText = String(answer).toLowerCase().trim();
+		isCorrect = correctText === aiText;
+	} else if (room.currentQuestion.type === 'numerical') {
+		isCorrect = false; // Will be calculated in tiebreaker logic
+	}
 	
 	room.playerAnswers[aiId] = {
 		playerId: aiId,
@@ -486,13 +488,24 @@ function processDuelResult(roomId) {
 	const pointsAwarded = {};
 
 	// Build detailed resolution info
+	let correctAnswerDisplay;
+	if (room.currentQuestion.type === 'multiple_choice') {
+		correctAnswerDisplay = room.currentQuestion.options[room.currentQuestion.correctAnswer];
+	} else if (room.currentQuestion.type === 'text') {
+		correctAnswerDisplay = room.currentQuestion.textAnswer;
+	} else if (room.currentQuestion.type === 'numerical') {
+		correctAnswerDisplay = room.currentQuestion.numericalAnswer;
+	}
+	
 	let resolutionDetails = {
 		questionType: room.currentQuestion.type,
-		correctAnswer: room.currentQuestion.correctAnswer,
+		correctAnswer: correctAnswerDisplay,
 		attackerAnswer: attackerAnswer ? attackerAnswer.answer : 'No answer',
 		defenderAnswer: defenderAnswer ? defenderAnswer.answer : 'No answer',
 		attackerCorrect: attackerAnswer ? attackerAnswer.isCorrect : false,
-		defenderCorrect: defenderAnswer ? defenderAnswer.isCorrect : false
+		defenderCorrect: defenderAnswer ? defenderAnswer.isCorrect : false,
+		attackerTime: attackerAnswer ? Math.round((attackerAnswer.timestamp - room.duelStartTime) / 10) / 100 : 'No answer',
+		defenderTime: defenderAnswer ? Math.round((defenderAnswer.timestamp - room.duelStartTime) / 10) / 100 : 'No answer'
 	};
 
 	if (!attackerAnswer && !defenderAnswer) {
@@ -603,7 +616,8 @@ function startTiebreaker(roomId) {
 	const numericalQuestion = getRandomNumericalQuestion();
 	room.currentDuel.tiebreaker = numericalQuestion;
 	room.currentQuestion = numericalQuestion;
-	room.timeRemaining = 10;
+	room.timeRemaining = 15; // Increased from 10 to 15 seconds
+	room.duelStartTime = Date.now(); // Track tiebreaker start time
 	room.playerAnswers = {};
 
 	console.log(`Tiebreaker started in room ${roomId}`);
@@ -611,13 +625,22 @@ function startTiebreaker(roomId) {
 	
 	// Schedule AI tiebreaker answers
 	const { attackerId, defenderId } = room.currentDuel;
+	const humanPlayerInTiebreaker = room.players.some(p => 
+		(p.id === attackerId || p.id === defenderId) && !players.get(p.id)?.isAI
+	);
+	
 	[attackerId, defenderId].forEach(playerId => {
 		if (players.get(playerId)?.isAI) {
 			const aiPlayer = aiPlayers.get(playerId);
 			if (aiPlayer) {
+				// Give human players more time in tiebreakers too
+				const responseDelay = humanPlayerInTiebreaker ? 
+					Math.max(6000, aiPlayer.responseTime * 800) : // Minimum 6 seconds with humans
+					aiPlayer.responseTime * 800; // Normal timing for AI vs AI
+					
 				setTimeout(() => {
 					aiAnswerTiebreaker(playerId);
-				}, aiPlayer.responseTime * 800); // Faster for tiebreaker
+				}, responseDelay);
 			}
 		}
 	});
@@ -674,8 +697,8 @@ function processTiebreakerResult(roomId) {
 		correctAnswer: correctAnswer,
 		attackerAnswer: attackerAnswer ? attackerAnswer.answer : 'No answer',
 		defenderAnswer: defenderAnswer ? defenderAnswer.answer : 'No answer',
-		attackerTime: attackerAnswer ? Math.round((attackerAnswer.timestamp - (Date.now() - room.timeRemaining * 1000)) / 1000 * 100) / 100 : 'No answer',
-		defenderTime: defenderAnswer ? Math.round((defenderAnswer.timestamp - (Date.now() - room.timeRemaining * 1000)) / 1000 * 100) / 100 : 'No answer'
+		attackerTime: attackerAnswer ? Math.round((attackerAnswer.timestamp - room.duelStartTime) / 10) / 100 : 'No answer',
+		defenderTime: defenderAnswer ? Math.round((defenderAnswer.timestamp - room.duelStartTime) / 10) / 100 : 'No answer'
 	};
 
 	if (attackerAnswer && defenderAnswer) {
@@ -729,11 +752,21 @@ function processTiebreakerResult(roomId) {
 
 	// Complete the turn with detailed resolution
 	const turnResult = room.turnHistory[room.turnHistory.length - 1];
-	turnResult.result.winner = winner;
-	turnResult.result.territoryConquered = territoryConquered;
-	turnResult.result.pointsAwarded = pointsAwarded;
-	turnResult.result.resolutionDetails = resolutionDetails;
-	room.currentDuel.result = turnResult.result;
+	if (turnResult && turnResult.result) {
+		turnResult.result.winner = winner;
+		turnResult.result.territoryConquered = territoryConquered;
+		turnResult.result.pointsAwarded = pointsAwarded;
+		turnResult.result.resolutionDetails = resolutionDetails;
+		room.currentDuel.result = turnResult.result;
+	} else {
+		// Create the result directly on currentDuel if turnResult doesn't exist
+		room.currentDuel.result = {
+			winner: winner,
+			territoryConquered: territoryConquered,
+			pointsAwarded: pointsAwarded,
+			resolutionDetails: resolutionDetails
+		};
+	}
 
 	console.log(`Tiebreaker result: ${resolutionDetails.winReason}. Territory: ${territoryConquered || 'none'}`);
 	console.log(`Details: Correct=${correctAnswer}, ${attacker?.name}=${attackerAnswer?.answer || 'N/A'}, ${defender?.name}=${defenderAnswer?.answer || 'N/A'}`);
@@ -756,6 +789,10 @@ function processTiebreakerResult(roomId) {
 function nextTurn(roomId) {
 	const room = gameRooms.get(roomId);
 	if (!room) return;
+	
+	// Prevent multiple simultaneous calls to nextTurn
+	if (room.transitioning) return;
+	room.transitioning = true;
 
 	// Clear current duel
 	room.currentDuel = null;
@@ -794,6 +831,12 @@ function nextTurn(roomId) {
 		}, 2000); // AI thinks for 2 seconds
 	}
 
+	// Start territory selection timer
+	startTerritorySelectionTimer(roomId);
+
+	// Clear transitioning flag
+	room.transitioning = false;
+
 	io.to(roomId).emit('gameState', room);
 }
 
@@ -819,7 +862,15 @@ function aiSelectTerritory(aiId) {
 	const defenderId = getTerritoryOwner(room, targetTerritory);
 	const defender = room.players.find(p => p.id === defenderId);
 
+	// Safety check: make sure AI isn't attacking its own territory
+	if (defenderId === aiId) {
+		console.error(`ERROR: AI ${player.name} tried to attack own territory ${targetTerritory}! Skipping turn.`);
+		nextTurn(player.roomId);
+		return;
+	}
+
 	console.log(`AI ${player.name} selected territory: ${targetTerritory} (owned by ${defender?.name})`);
+	console.log(`Attackable territories for ${player.name}:`, attackableTerritories);
 	startDuel(player.roomId, aiId, targetTerritory);
 }
 
@@ -976,7 +1027,14 @@ io.on('connection', (socket) => {
 		const defenderId = getTerritoryOwner(room, targetTerritoryId);
 		const defender = room.players.find(p => p.id === defenderId);
 
+		// Safety check: make sure player isn't attacking their own territory
+		if (defenderId === socket.id) {
+			console.error(`ERROR: Player ${player.name} tried to attack own territory ${targetTerritoryId}!`);
+			return;
+		}
+
 		console.log(`${player.name} selected territory: ${targetTerritoryId} (owned by ${defender?.name})`);
+		console.log(`Attackable territories for ${player.name}:`, attackableTerritories);
 		startDuel(player.roomId, socket.id, targetTerritoryId);
 	});
 
@@ -1000,6 +1058,11 @@ io.on('connection', (socket) => {
 		} else if (room.currentQuestion.type === 'numerical') {
 			// For numerical questions, just store the answer
 			isCorrect = false; // Will be calculated in tiebreaker logic
+		} else if (room.currentQuestion.type === 'text') {
+			// For text questions, compare case-insensitive
+			const correctText = room.currentQuestion.textAnswer.toLowerCase().trim();
+			const userText = String(answer).toLowerCase().trim();
+			isCorrect = correctText === userText;
 		}
 		
 		// Store player answer

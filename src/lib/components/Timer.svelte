@@ -91,14 +91,6 @@
 		</div>
 	</div>
 	
-	<div class="timer-controls">
-		{#if !isRunning}
-			<button onclick={start} class="btn-start">Start</button>
-		{:else}
-			<button onclick={stop} class="btn-stop">Stop</button>
-		{/if}
-		<button onclick={reset} class="btn-reset">Reset</button>
-	</div>
 </div>
 
 <style>
@@ -155,46 +147,6 @@
 		font-size: 2rem;
 	}
 
-	.timer-controls {
-		display: flex;
-		gap: 0.5rem;
-	}
-
-	.timer-controls button {
-		padding: 0.5rem 1rem;
-		border: none;
-		border-radius: 4px;
-		cursor: pointer;
-		font-size: 0.875rem;
-		transition: background-color 0.2s;
-	}
-
-	.btn-start {
-		background-color: #10b981;
-		color: white;
-	}
-
-	.btn-start:hover {
-		background-color: #059669;
-	}
-
-	.btn-stop {
-		background-color: #ef4444;
-		color: white;
-	}
-
-	.btn-stop:hover {
-		background-color: #dc2626;
-	}
-
-	.btn-reset {
-		background-color: #6b7280;
-		color: white;
-	}
-
-	.btn-reset:hover {
-		background-color: #4b5563;
-	}
 
 	.normal {
 		color: #10b981;

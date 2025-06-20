@@ -4,6 +4,7 @@
 	import CanaanMap from '$lib/components/CanaanMap.svelte';
 	import TurnProgressDisplay from '$lib/components/TurnProgressDisplay.svelte';
 	import DebugPanel from '$lib/components/DebugPanel.svelte';
+	import DuelModal from '$lib/components/DuelModal.svelte';
 	// Smart socket: WebSocket for local development, Vercel HTTP for production
 	import { socketService, gameState, isConnected } from '$lib/smart-socket.js';
 
@@ -12,8 +13,12 @@
 	let aiPlayerCount = $state(2); // Default to 2 AI players
 	let myPlayerId = $state('');
 	let numericalInput: HTMLInputElement | undefined = undefined;
+	let textAnswer = $state('');
 	let lastGamePhase = $state('');
 	let hasSubmittedAnswer = $state(false);
+	let selectedAnswerIndex = $state<number | null>(null);
+	let isDuelModalOpen = $state(false);
+	let territoryFeedback = $state<{message: string, type: 'success' | 'error' | 'info'} | null>(null);
 
 	onMount(() => {
 		socketService.connect();
@@ -24,22 +29,50 @@
 		if ($gameState?.phase !== lastGamePhase) {
 			lastGamePhase = $gameState?.phase || '';
 			hasSubmittedAnswer = false; // Reset on phase change
+			selectedAnswerIndex = null; // Reset selected answer on phase change
+			textAnswer = ''; // Reset text answer on phase change
+		}
+		
+		// Update hasSubmittedAnswer based on actual game state
+		if ($gameState?.phase === 'duel') {
+			hasSubmittedAnswer = hasCurrentPlayerSubmitted();
+			isDuelModalOpen = true;
+		} else {
+			isDuelModalOpen = false;
 		}
 
-		// Auto-submit numerical answer when timer expires
+		// Force close modal if timer has been at 0 for too long (safety mechanism)
+		if ($gameState?.phase === 'duel' && $gameState?.timeRemaining <= 0) {
+			setTimeout(() => {
+				if ($gameState?.phase === 'duel' && $gameState?.timeRemaining <= 0) {
+					console.log('Force closing modal due to timeout');
+					isDuelModalOpen = false;
+				}
+			}, 3000); // Give 3 seconds for server to process results
+		}
+
+		// Auto-submit any available answer when timer expires
 		if ($gameState?.phase === 'duel' && 
 			$gameState?.timeRemaining === 0 && 
-			$gameState?.currentQuestion?.type === 'numerical' && 
-			!hasSubmittedAnswer &&
-			numericalInput?.value) {
+			!hasCurrentPlayerSubmitted()) {
 			
 			const myPlayer = $gameState.players.find(p => !p.id.startsWith('ai_'));
 			const isParticipant = myPlayer && ($gameState.currentDuel?.attackerId === myPlayer.id || $gameState.currentDuel?.defenderId === myPlayer.id);
 			
 			if (isParticipant) {
-				console.log('Auto-submitting numerical answer on timer expiry:', numericalInput.value);
-				submitDuelAnswer(parseInt(numericalInput.value));
-				hasSubmittedAnswer = true;
+				let answerToSubmit = null;
+				
+				if ($gameState.currentQuestion?.type === 'numerical' && numericalInput?.value?.trim()) {
+					answerToSubmit = parseInt(numericalInput.value);
+					console.log('Auto-submitting numerical answer on timer expiry:', answerToSubmit);
+				} else if ($gameState.currentQuestion?.type === 'text' && textAnswer?.trim()) {
+					answerToSubmit = textAnswer.trim();
+					console.log('Auto-submitting text answer on timer expiry:', answerToSubmit);
+				}
+				
+				if (answerToSubmit !== null) {
+					submitDuelAnswer(answerToSubmit);
+				}
 			}
 		}
 	});
@@ -66,7 +99,17 @@
 
 	function submitDuelAnswer(answerIndex: number | string) {
 		socketService.submitDuelAnswer(answerIndex);
-		hasSubmittedAnswer = true;
+		if (typeof answerIndex === 'number') {
+			selectedAnswerIndex = answerIndex;
+		}
+	}
+
+	// Check if current player has already submitted their answer
+	function hasCurrentPlayerSubmitted(): boolean {
+		if (!$gameState?.currentDuel || !$gameState?.playerAnswers) return false;
+		const myPlayer = $gameState.players.find(p => !p.id.startsWith('ai_'));
+		if (!myPlayer) return false;
+		return !!$gameState.playerAnswers[myPlayer.id];
 	}
 
 	function selectTerritory(targetTerritoryId: string) {
@@ -116,6 +159,9 @@
 		const territoryId = event.territoryId;
 		console.log('Territory clicked:', territoryId);
 		
+		// Clear previous feedback
+		territoryFeedback = null;
+		
 		// If it's territory selection phase and my turn, try to attack this territory
 		if ($gameState?.phase === 'territory_selection') {
 			const currentPlayer = $gameState.players[$gameState.currentPlayerIndex];
@@ -130,18 +176,44 @@
 				territoryId
 			});
 			
-			if (isMyTurn) {
-				const attackableTerritories = getAttackableTerritories($gameState, myPlayer.id);
-				console.log('Attackable territories:', attackableTerritories);
+			if (!isMyTurn) {
+				showTerritoryFeedback(`It's ${currentPlayer?.name}'s turn, not yours!`, 'info');
+				return;
+			}
+			
+			const attackableTerritories = getAttackableTerritories($gameState, myPlayer.id);
+			console.log('Attackable territories:', attackableTerritories);
+			
+			if (attackableTerritories.includes(territoryId)) {
+				console.log('Attacking territory:', territoryId);
+				const territoryName = territoryId.charAt(0).toUpperCase() + territoryId.slice(1);
+				showTerritoryFeedback(`Attacking ${territoryName}!`, 'success');
+				selectTerritory(territoryId);
+			} else {
+				// Provide specific feedback based on why it's not attackable
+				const territoryOwner = $gameState.territories?.[territoryId];
+				const ownerPlayer = $gameState.players.find(p => p.id === territoryOwner);
+				const territoryName = territoryId.charAt(0).toUpperCase() + territoryId.slice(1);
 				
-				if (attackableTerritories.includes(territoryId)) {
-					console.log('Attacking territory:', territoryId);
-					selectTerritory(territoryId);
+				if (territoryOwner === myPlayer.id) {
+					showTerritoryFeedback(`${territoryName} is already yours!`, 'error');
+				} else if (!territoryOwner) {
+					showTerritoryFeedback(`${territoryName} has no owner`, 'error');
 				} else {
-					console.log('Territory not attackable:', territoryId);
+					showTerritoryFeedback(`${territoryName} is not adjacent to your territories`, 'error');
 				}
 			}
+		} else {
+			showTerritoryFeedback('You can only attack during territory selection phase', 'info');
 		}
+	}
+
+	function showTerritoryFeedback(message: string, type: 'success' | 'error' | 'info') {
+		territoryFeedback = { message, type };
+		// Auto-clear feedback after 3 seconds
+		setTimeout(() => {
+			territoryFeedback = null;
+		}, 3000);
 	}
 
 	function addAIPlayer() {
@@ -319,6 +391,24 @@
 								Click on a highlighted territory on the map to attack it
 							</p>
 							
+							<!-- Territory Feedback -->
+							{#if territoryFeedback}
+								<div class="mb-4 p-3 rounded-lg border-2 transition-all duration-300 {
+									territoryFeedback.type === 'success' ? 'bg-green-50 border-green-300 text-green-800' :
+									territoryFeedback.type === 'error' ? 'bg-red-50 border-red-300 text-red-800' :
+									'bg-blue-50 border-blue-300 text-blue-800'
+								}">
+									<div class="flex items-center justify-center gap-2">
+										<i class="fas {
+											territoryFeedback.type === 'success' ? 'fa-check-circle' :
+											territoryFeedback.type === 'error' ? 'fa-exclamation-triangle' :
+											'fa-info-circle'
+										}"></i>
+										<span class="font-medium">{territoryFeedback.message}</span>
+									</div>
+								</div>
+							{/if}
+							
 							{#if attackableTerritories.length === 0}
 								<div class="text-amber-600 bg-amber-50 p-4 rounded-lg mb-4">
 									<i class="fas fa-exclamation-triangle mr-2"></i>
@@ -338,138 +428,54 @@
 					</div>
 				</div>
 
-			{:else if $gameState.phase === 'duel' && $gameState.currentQuestion && $gameState.currentDuel}
-				{@const myPlayer = $gameState.players.find(p => !p.id.startsWith('ai_'))}
-				{@const isParticipant = myPlayer && ($gameState.currentDuel.attackerId === myPlayer.id || $gameState.currentDuel.defenderId === myPlayer.id)}
-				{@const attacker = $gameState.players.find(p => p.id === $gameState.currentDuel.attackerId)}
-				{@const defender = $gameState.players.find(p => p.id === $gameState.currentDuel.defenderId)}
+			{:else if $gameState.phase === 'duel' && $gameState.currentDuel}
+				{@const attacker = $gameState.players.find(p => p.id === $gameState.currentDuel?.attackerId)}
+				{@const defender = $gameState.players.find(p => p.id === $gameState.currentDuel?.defenderId)}
 				
+				<!-- Simplified duel notification - main interaction happens in modal -->
 				<div class="text-center">
-					<div class="mb-4 p-4 bg-red-50 border-2 border-red-300 rounded-lg">
-						<h3 class="text-lg font-bold text-red-800 mb-2">
-							<i class="fas fa-sword mr-2"></i>
-							{$gameState.currentDuel.tiebreaker ? 'TIEBREAKER DUEL!' : 'BATTLE FOR TERRITORY!'}
+					<div class="mb-6 p-6 bg-red-50 border-2 border-red-300 rounded-lg">
+						<h3 class="text-2xl font-bold text-red-800 mb-3">
+							<i class="fas fa-sword mr-3"></i>
+							{$gameState.currentDuel.tiebreaker ? 'TIEBREAKER IN PROGRESS!' : 'BATTLE IN PROGRESS!'}
 						</h3>
-						<div class="text-center mb-3">
-							<div class="inline-block bg-amber-100 text-amber-800 px-3 py-1 rounded-full text-sm font-semibold">
-								<i class="fas fa-map-marker-alt mr-1"></i>
+						<div class="text-center mb-4">
+							<div class="inline-block bg-amber-100 text-amber-800 px-4 py-2 rounded-full font-semibold">
+								<i class="fas fa-map-marker-alt mr-2"></i>
 								{$gameState.currentDuel.defenderTerritory?.charAt(0).toUpperCase() + $gameState.currentDuel.defenderTerritory?.slice(1)}
 							</div>
 						</div>
-						<div class="flex items-center justify-center gap-4">
-							<div class="text-center">
-								<div class="text-sm font-medium">{attacker?.name}</div>
-								<div class="text-xs text-gray-600">Attacker</div>
+						<div class="flex items-center justify-center gap-6">
+							<div class="text-center bg-white bg-opacity-50 rounded-lg p-3">
+								<div class="font-bold text-lg">{attacker?.name}</div>
+								<div class="text-sm text-red-600">Attacker</div>
 							</div>
-							<i class="fas fa-sword text-red-600 text-2xl"></i>
-							<div class="text-center">
-								<div class="text-sm font-medium">{defender?.name}</div>
-								<div class="text-xs text-gray-600">Defender</div>
+							<div class="text-4xl">⚔️</div>
+							<div class="text-center bg-white bg-opacity-50 rounded-lg p-3">
+								<div class="font-bold text-lg">{defender?.name}</div>
+								<div class="text-sm text-blue-600">Defender</div>
+							</div>
+						</div>
+						
+						<!-- Answer Progress -->
+						<div class="flex justify-center gap-6 mt-4">
+							<div class="flex items-center gap-2">
+								<div class="w-4 h-4 rounded-full {$gameState.playerAnswers?.[$gameState.currentDuel.attackerId] ? 'bg-green-500' : 'bg-gray-300'}"></div>
+								<span class="text-sm">{attacker?.name}</span>
+							</div>
+							<div class="flex items-center gap-2">
+								<div class="w-4 h-4 rounded-full {$gameState.playerAnswers?.[$gameState.currentDuel.defenderId] ? 'bg-green-500' : 'bg-gray-300'}"></div>
+								<span class="text-sm">{defender?.name}</span>
 							</div>
 						</div>
 					</div>
-
-					<Timer 
-						duration={$gameState.timeRemaining} 
-						size="large"
-						onTimeUp={() => console.log('Duel time up!')}
-					/>
 					
-					<div class="mt-6">
-						<h3 class="text-xl font-semibold text-biblical-brown mb-4">{$gameState.currentQuestion.text}</h3>
-						
-						{#if isParticipant}
-							{#if $gameState.currentQuestion.type === 'multiple_choice'}
-								<div class="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl mx-auto">
-									{#each $gameState.currentQuestion.options as option, index}
-										<button 
-											class="p-4 bg-white text-biblical-brown border-2 border-biblical-gold rounded-lg hover:bg-biblical-gold hover:text-white transition-all duration-200 font-medium"
-											onclick={() => submitDuelAnswer(index)}
-											disabled={hasSubmittedAnswer}
-										>
-											{option}
-										</button>
-									{/each}
-								</div>
-							{:else if $gameState.currentQuestion.type === 'numerical'}
-								<div class="max-w-xs mx-auto">
-									<input 
-										bind:this={numericalInput}
-										type="number" 
-										placeholder="Enter your answer" 
-										class="input-biblical text-center text-lg w-full"
-										onkeydown={(e) => {
-											if (e.key === 'Enter' && !hasSubmittedAnswer) {
-												const input = e.target as HTMLInputElement;
-												if (input.value) {
-													submitDuelAnswer(parseInt(input.value));
-												}
-											}
-										}}
-									/>
-									<button 
-										class="btn-biblical w-full mt-2"
-										onclick={(e) => {
-											if (!hasSubmittedAnswer) {
-												const input = e.target.parentElement.querySelector('input') as HTMLInputElement;
-												if (input.value) {
-													submitDuelAnswer(parseInt(input.value));
-												}
-											}
-										}}
-										disabled={hasSubmittedAnswer}
-									>
-										Submit Answer
-									</button>
-								</div>
-							{/if}
+					<div class="text-gray-600">
+						<i class="fas fa-info-circle mr-2"></i>
+						{#if isDuelModalOpen}
+							Answer the question in the modal above to participate in this duel!
 						{:else}
-							<!-- Spectator View -->
-							<div class="text-gray-600 mb-4">
-								<i class="fas fa-eye mr-2"></i>Spectating this duel...
-							</div>
-							
-							{#if $gameState.currentQuestion.type === 'multiple_choice'}
-								<div class="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl mx-auto">
-									{#each $gameState.currentQuestion.options as option, index}
-										<div class="p-4 bg-gray-100 text-gray-700 border-2 border-gray-300 rounded-lg font-medium relative">
-											{option}
-											
-											<!-- Show who answered what -->
-											<div class="absolute top-1 right-1 flex gap-1">
-												{#if $gameState.playerAnswers?.[$gameState.currentDuel.attackerId]?.answer === index}
-													<div class="w-3 h-3 rounded-full bg-red-500" title="{attacker?.name} chose this"></div>
-												{/if}
-												{#if $gameState.playerAnswers?.[$gameState.currentDuel.defenderId]?.answer === index}
-													<div class="w-3 h-3 rounded-full bg-blue-500" title="{defender?.name} chose this"></div>
-												{/if}
-											</div>
-										</div>
-									{/each}
-								</div>
-							{:else if $gameState.currentQuestion.type === 'numerical'}
-								<div class="max-w-md mx-auto text-center">
-									<div class="bg-gray-100 p-4 rounded-lg mb-4">
-										<p class="text-gray-600">Numerical answer required</p>
-									</div>
-									
-									<!-- Show submitted answers -->
-									{#if $gameState.playerAnswers}
-										<div class="space-y-2">
-											{#if $gameState.playerAnswers[$gameState.currentDuel.attackerId]}
-												<div class="bg-red-50 text-red-800 p-2 rounded">
-													{attacker?.name}: {$gameState.playerAnswers[$gameState.currentDuel.attackerId].answer}
-												</div>
-											{/if}
-											{#if $gameState.playerAnswers[$gameState.currentDuel.defenderId]}
-												<div class="bg-blue-50 text-blue-800 p-2 rounded">
-													{defender?.name}: {$gameState.playerAnswers[$gameState.currentDuel.defenderId].answer}
-												</div>
-											{/if}
-										</div>
-									{/if}
-								</div>
-							{/if}
+							Duel interaction will appear when needed
 						{/if}
 					</div>
 				</div>
@@ -512,6 +518,11 @@
 										Off by: {result.resolutionDetails.attackerDiff}
 									</div>
 								{/if}
+								{#if result.resolutionDetails?.attackerTime && result.resolutionDetails.attackerTime !== 'No answer'}
+									<div class="text-xs text-gray-500 mt-1">
+										<i class="fas fa-clock mr-1"></i>Time: {result.resolutionDetails.attackerTime}s
+									</div>
+								{/if}
 							</div>
 						</div>
 						
@@ -528,6 +539,11 @@
 								{:else if result.resolutionDetails?.defenderDiff !== undefined}
 									<div class="text-xs text-gray-600">
 										Off by: {result.resolutionDetails.defenderDiff}
+									</div>
+								{/if}
+								{#if result.resolutionDetails?.defenderTime && result.resolutionDetails.defenderTime !== 'No answer'}
+									<div class="text-xs text-gray-500 mt-1">
+										<i class="fas fa-clock mr-1"></i>Time: {result.resolutionDetails.defenderTime}s
 									</div>
 								{/if}
 							</div>
@@ -629,6 +645,18 @@
 			</div>
 		</div>
 	{/if}
+
+	<!-- Duel Modal -->
+	<DuelModal 
+		gameState={$gameState}
+		isOpen={isDuelModalOpen}
+		onClose={() => isDuelModalOpen = false}
+		onSubmitAnswer={submitDuelAnswer}
+		hasSubmittedAnswer={hasSubmittedAnswer}
+		selectedAnswerIndex={selectedAnswerIndex}
+		textAnswer={textAnswer}
+		numericalInput={numericalInput}
+	/>
 
 	<!-- Debug Panel - Always visible for debugging -->
 	<div class="fixed bottom-4 right-4 w-96 z-50">
