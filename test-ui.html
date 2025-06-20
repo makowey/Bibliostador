@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Bibliostador</title>
+</head>
+<body>
+    <h1>Testing Bibliostador UI</h1>
+    <script>
+        // Simple test to verify the app loads
+        fetch('http://localhost:5174/')
+            .then(response => response.text())
+            .then(html => {
+                if (html.includes('Bibliostador')) {
+                    console.log('✅ App loaded successfully');
+                } else {
+                    console.log('❌ App failed to load');
+                }
+            })
+            .catch(error => {
+                console.log('❌ Error:', error);
+            });
+    </script>
+</body>
+</html>
