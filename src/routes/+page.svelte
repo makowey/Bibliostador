@@ -4,7 +4,8 @@
 	import CanaanMap from '$lib/components/CanaanMap.svelte';
 	import TurnProgressDisplay from '$lib/components/TurnProgressDisplay.svelte';
 	import DebugPanel from '$lib/components/DebugPanel.svelte';
-	import { socketService, gameState, isConnected } from '$lib/vercel-socket.js';
+	// Smart socket: WebSocket for local development, Vercel HTTP for production
+	import { socketService, gameState, isConnected } from '$lib/smart-socket.js';
 
 	let playerName = $state('');
 	let roomId = $state('');

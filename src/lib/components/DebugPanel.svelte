@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { writable } from 'svelte/store';
-	import { setDebugLogger } from '$lib/vercel-socket';
-	import type { GameState } from '$lib/vercel-socket';
+	import { setDebugLogger, type GameState } from '$lib/smart-socket';
 
 	interface Props {
 		gameState: GameState | null;
